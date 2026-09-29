@@ -65,7 +65,7 @@ async def internal_knowledge_agent(state: AgentState) -> AgentState:
         completed_total = sum(
             1 for r in past_recs
             for a in r.get("recommendations", [])
-            if a.get("status") == "completed"
+            if a.get("todo_status") == "done" or a.get("status") == "completed"
         )
         logs.append(
             f"[InternalKnowledge] {len(past_recs)} past analyses in memory — "

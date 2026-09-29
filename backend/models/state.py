@@ -26,6 +26,7 @@ class AgentState(TypedDict):
 
     # ── Memory ─────────────────────────────────────────
     past_recommendations: list[dict]
+    hindsight_entries: list[dict]
 
     # ── Lifecycle ──────────────────────────────────────
     # running | awaiting_approval | approved | rejected | complete

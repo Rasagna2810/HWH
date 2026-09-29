@@ -7,7 +7,7 @@ import {
 const META = {
   planner:            { icon: Brain,       label: 'Planner',            color: 'indigo', desc: 'Designs the workflow' },
   internal_knowledge: { icon: Database,    label: 'Internal Knowledge',  color: 'blue',   desc: 'MongoDB + Qdrant retrieval' },
-  external_research:  { icon: Globe,       label: 'External Research',   color: 'purple', desc: 'Tavily web intelligence' },
+  // external_research:  { icon: Globe,       label: 'External Research',   color: 'purple', desc: 'Tavily web intelligence' },
   reasoning:          { icon: Cpu,         label: 'Reasoning',           color: 'orange', desc: 'Risk & opportunity analysis' },
   recommendation:     { icon: Lightbulb,   label: 'Recommendation',      color: 'yellow', desc: 'Next best actions' },
   report:             { icon: FileText,    label: 'Report',              color: 'green',  desc: 'Executive report' },
@@ -56,10 +56,9 @@ function AgentNode({ name, status }) {
 }
 
  function WorkflowPanel({ plan, currentAgent, agentStatuses, logs }) {
-  const pipeline = ['planner', ...(plan.length
-    ? plan
-    : ['internal_knowledge', 'external_research', 'reasoning', 'recommendation', 'report']
-  )]
+  const pipeline = plan.length
+    ? plan[0] === 'planner' ? plan : ['planner', ...plan]
+    : ['planner', 'internal_knowledge', 'reasoning', 'recommendation', 'report']
 
   return (
     <div className="card h-full flex flex-col gap-4">
@@ -102,7 +101,7 @@ function AgentNode({ name, status }) {
                   'font-mono text-[10px] leading-relaxed',
                   l.startsWith('[Planner]')         ? 'text-indigo-400' :
                   l.startsWith('[InternalKnowledge]')? 'text-blue-400' :
-                  l.startsWith('[ExternalResearch]') ? 'text-purple-400' :
+                  // l.startsWith('[ExternalResearch]') ? 'text-purple-400' :
                   l.startsWith('[Reasoning]')        ? 'text-orange-400' :
                   l.startsWith('[Recommendation]')   ? 'text-yellow-400' :
                   l.startsWith('[Report]')           ? 'text-emerald-400' :

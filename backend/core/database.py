@@ -201,6 +201,11 @@ async def startup_db() -> None:
     """Called at FastAPI startup."""
     await ensure_qdrant_collection()
     db = get_db()
+    await db.hindsight_logs.create_index(
+        "source_key",
+        unique=True,
+        partialFilterExpression={"source_key": {"$type": "string", "$gt": ""}},
+    )
 
     if await db.users.count_documents({}) == 0:
         await _seed_users(db)

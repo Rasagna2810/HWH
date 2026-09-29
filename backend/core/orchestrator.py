@@ -37,6 +37,7 @@ async def run_workflow_streaming(
         "agent_logs":            [],
         "errors":                [],
         "past_recommendations":  [],
+        "hindsight_entries":     [],
         "status":                "running",
     }
 

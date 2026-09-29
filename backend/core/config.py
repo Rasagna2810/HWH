@@ -1,5 +1,5 @@
 from functools import lru_cache
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings,SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -11,6 +11,11 @@ class Settings(BaseSettings):
 
     qdrant_url:        str
     qdrant_collection: str 
+
+    hindsight_base_url: str = ""
+    hindsight_api_key: str | None = None
+    hindsight_bank_id: str = "aegisai-customer-success"
+    hindsight_timeout_seconds: float = 30.0
 
     jwt_secret:         str 
     jwt_algorithm:      str

@@ -1,4 +1,5 @@
 import json
+
 from core.llm import get_llm
 from models.state import AgentState
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -27,11 +28,10 @@ async def recommendation_agent(state: AgentState) -> AgentState:
 
     customer = ctx.get("customer", {})
 
-    # Avoid re-recommending completed actions (memory / learning)
     completed: list[str] = []
     for rec_set in past_recs:
         for action in rec_set.get("recommendations", []):
-            if action.get("status") == "completed":
+            if action.get("todo_status") == "done" or action.get("status") == "completed":
                 completed.append(action.get("title", ""))
 
     completed_note = ""

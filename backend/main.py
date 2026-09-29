@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import get_settings
 from core.database import startup_db
+from core.hindsight import close_hindsight_client, ensure_hindsight_bank
 from api.auth import router as auth_router
 from api.customers import router as customers_router
 from api.analysis import router as analysis_router
@@ -15,9 +16,13 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     print("🚀  NBA Platform — starting up")
     await startup_db()
+    await ensure_hindsight_bank()
     print("✅  Databases ready")
-    yield
-    print("🛑  NBA Platform — shutting down")
+    try:
+        yield
+    finally:
+        await close_hindsight_client()
+        print("🛑  NBA Platform — shutting down")
 
 
 app = FastAPI(

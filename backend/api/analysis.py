@@ -1,5 +1,6 @@
 import json as _json
 from datetime import datetime
+from uuid import uuid4
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from jose import jwt
@@ -7,6 +8,7 @@ from core.auth import get_current_user
 from core.config import get_settings
 from core.database import get_db
 from core.orchestrator import run_workflow_streaming
+from agents.hindsight import save_recommendation_hindsight
  
 router   = APIRouter(prefix="/analysis", tags=["analysis"])
 settings = get_settings()
@@ -24,6 +26,58 @@ def _ser(doc: dict) -> dict:
         doc["id"] = str(doc["_id"])
         del doc["_id"]
     return doc
+
+
+async def _customer_for_report(db, report: dict) -> dict:
+    customer_id = report.get("customer_id", "")
+    customer_oid = _oid(customer_id) if customer_id else None
+    customer = await db.customers.find_one({"_id": customer_oid}) if customer_oid else None
+    if not customer and report.get("customer_name"):
+        customer = await db.customers.find_one({"name": report["customer_name"]})
+    return customer or {}
+
+
+def _hindsight_record(report: dict, customer: dict, recommendation: dict, decision: str,
+                      reviewer: str, timestamp: str, feedback: str = "") -> dict:
+    title = recommendation.get("title") or recommendation.get("recommendation") or "Recommendation"
+    return {
+        "source_key": f"recommendation:{report.get('_id')}:{recommendation.get('id')}",
+        "customer_id": report.get("customer_id", ""),
+        "customer_name": report.get("customer_name", "Unknown"),
+        "campaign_name": report.get("customer_name", "Unknown"),
+        "industry": customer.get("industry", ""),
+        "country": customer.get("country", ""),
+        "target_persona": recommendation.get("target_persona") or recommendation.get("persona", ""),
+        "problem": recommendation.get("problem") or recommendation.get("risk") or report.get("summary", ""),
+        "summary": recommendation.get("description") or recommendation.get("summary") or title,
+        "recommendation": title,
+        "expected_outcome": recommendation.get("expected_outcome", ""),
+        "success_metric": recommendation.get("success_metric", ""),
+        "outcome": recommendation.get("outcome", ""),
+        "decision": decision,
+        "feedback": feedback,
+        "reviewer": reviewer,
+        "approved_by": recommendation.get("approved_by", ""),
+        "approved_at": recommendation.get("approved_at", ""),
+        "rejected_by": recommendation.get("rejected_by", ""),
+        "rejected_at": recommendation.get("rejected_at", ""),
+        "done_by": recommendation.get("done_by", ""),
+        "done_at": recommendation.get("done_at", ""),
+        "todo_status": recommendation.get("todo_status", ""),
+        "metrics": recommendation.get("metrics", {}) or {},
+        "lessons": {
+            "what_worked": recommendation.get("what_worked") or [],
+            "what_failed": recommendation.get("what_failed") or [],
+            "best_queries": recommendation.get("best_queries") or [],
+            "worst_queries": recommendation.get("worst_queries") or [],
+            "best_signals": recommendation.get("best_signals") or [],
+            "avoid_next_time": recommendation.get("avoid_next_time") or [],
+            "do_next_time": recommendation.get("do_next_time") or [],
+            "summary": recommendation.get("outcome") or feedback or recommendation.get("description") or "",
+        },
+        "accepted": decision == "approved",
+        "created_at": timestamp,
+    }
  
  
 @router.websocket("/ws/{customer_id}")
@@ -61,6 +115,7 @@ async def analysis_ws(websocket: WebSocket, customer_id: str):
             recs = final_state.get("recommendations", [])
             # Stamp each recommendation with todo_status=None at creation time
             for r in recs:
+                r.setdefault("id", str(uuid4()))
                 r.setdefault("todo_status", None)      # None → not yet reviewed
                 r.setdefault("status", "awaiting_approval")  # awaiting_approval | approved | rejected
                 r.setdefault("rejection_reason", None)
@@ -141,6 +196,7 @@ async def approve_report(report_id: str, body: dict, user=Depends(get_current_us
     recs     = doc.get("recommendations", [])
     now      = datetime.utcnow().isoformat()
     reviewer = user.get("name", user.get("email", ""))
+    selected: list[dict] = []
  
     def _approve(r):
         r.update({"status": "approved", "todo_status": "pending",
@@ -152,24 +208,56 @@ async def approve_report(report_id: str, body: dict, user=Depends(get_current_us
                   "rejected_by": reviewer, "rejected_at": now})
  
     if action == "approve_all":
-        for r in recs: _approve(r)
+        for r in recs:
+            _approve(r)
+            selected.append(r)
         new_status = "approved"
     elif action == "reject_all":
-        for r in recs: _reject(r)
+        for r in recs:
+            _reject(r)
+            selected.append(r)
         new_status = "rejected"
-    else:
+    elif action in {"approve", "reject"}:
         for r in recs:
             if r.get("id") in rec_ids:
-                if action == "approve": _approve(r)
-                else:                   _reject(r)
+                if action == "approve":
+                    _approve(r)
+                else:
+                    _reject(r)
+                selected.append(r)
+        if not selected:
+            raise HTTPException(404, "No matching recommendation IDs found")
         approved   = sum(1 for r in recs if r.get("status") == "approved")
         new_status = "partially_approved" if approved else "awaiting_approval"
+    else:
+        raise HTTPException(400, "action must be approve_all, reject_all, approve, or reject")
  
     await db.recommendations.update_one(
         {"_id": oid},
         {"$set": {"recommendations": recs, "status": new_status,
                   "reviewed_by": reviewer, "reviewed_at": now}},
     )
+
+    customer = await _customer_for_report(db, doc)
+    persistence_errors = []
+    decision = "approved" if action in {"approve", "approve_all"} else "rejected"
+    for recommendation in selected:
+        try:
+            await save_recommendation_hindsight(_hindsight_record(
+                doc, customer, recommendation, decision, reviewer, now,
+                feedback=reason,
+            ))
+        except Exception as exc:
+            persistence_errors.append(str(exc))
+    if persistence_errors:
+        raise HTTPException(
+            503,
+            detail=(
+                "The decision was saved to recommendations, but hindsight persistence failed. "
+                "Retry the same approval/rejection request; writes are idempotent. "
+                f"Error: {persistence_errors[0]}"
+            ),
+        )
     return {"status": new_status}
 @router.get("/todos")
 async def get_all_todos(user=Depends(get_current_user)):
@@ -232,9 +320,10 @@ async def mark_todo_done(body: dict, user=Depends(get_current_user)):
  
     doc  = await db.recommendations.find_one({"_id": oid})
     if not doc: raise HTTPException(404, "Report not found")
- 
+
     recs = doc.get("recommendations", [])
     now  = datetime.utcnow().isoformat()
+    matched = None
     for r in recs:
         if r.get("id") == rec_id:
             r.update({
@@ -243,8 +332,32 @@ async def mark_todo_done(body: dict, user=Depends(get_current_user)):
                 "done_by":        user.get("name", ""),
                 "done_at":        now,
             })
+            matched = r
+
+    if not matched:
+        raise HTTPException(404, "Recommendation not found")
  
     await db.recommendations.update_one({"_id": oid}, {"$set": {"recommendations": recs}})
+
+    customer = await _customer_for_report(db, doc)
+    try:
+        await save_recommendation_hindsight(_hindsight_record(
+            doc,
+            customer,
+            matched,
+            "approved",
+            user.get("name", ""),
+            now,
+        ))
+    except Exception as exc:
+        raise HTTPException(
+            503,
+            detail=(
+                "The todo outcome was saved to recommendations, but hindsight persistence failed. "
+                "Retry submitting the outcome; writes are idempotent. "
+                f"Error: {exc}"
+            ),
+        ) from exc
     return {"status": "done", "outcome": outcome}
  
  

@@ -1,15 +1,40 @@
 import json
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from langchain_core.messages import HumanMessage, SystemMessage
 from models.state import AgentState
 from core.llm import get_llm
  
-_SYSTEM = """You are a Senior Customer Success AI Analyst for a B2B SaaS company.
- 
-You receive raw customer data and must output a complete analysis + prioritised action plan in ONE response.
- 
-Be specific and evidence-based. Every recommendation must cite the exact data that justifies it.
-Output ONLY valid JSON, no markdown fences."""
+_SYSTEM = """
+You are a Senior Customer Success AI Analyst working for a B2B SaaS company.
+
+Your objective is to help Customer Success Managers make better business decisions for an individual customer.
+
+You are NOT a chatbot.
+
+You are an enterprise decision intelligence engine.
+
+Your responsibilities are:
+
+• Analyse customer context.
+• Recommend the Next Best Actions.
+• Explain every recommendation with supporting evidence.
+
+Always think like an experienced Customer Success Manager.
+
+Never invent facts.
+
+If evidence is insufficient, explicitly mention the information gap.
+
+Every recommendation must be:
+
+• Evidence-based
+• Business-focused
+• Actionable
+• Measurable
+• Realistic
+• Supported by customer interactions or enterprise knowledge
+
+Output ONLY valid JSON."""
  
 _COMBINED_PROMPT = """Analyse this customer and generate Next Best Actions.
  
@@ -24,19 +49,200 @@ _COMBINED_PROMPT = """Analyse this customer and generate Next Best Actions.
  
 === MEMORY: PAST RECOMMENDATIONS ===
 {past_text}
+
+=== HINDSIGHT: DECISIONS AND ACTUAL OUTCOMES ===
+{hindsight_text}
  
 === TODAY'S DATE ===
 {today}
  
 INSTRUCTIONS:
-1. Calculate health_score (0-100) and status from the interaction data — do NOT use the stored values.
-   - Start at 100. Deduct for: open critical tickets (-20), renewal risk mentioned (-15),
-     competitor evaluation (-20), low adoption mentioned (-10), escalation emails (-10),
-     unanswered urgent emails (-10). Add for: positive check-ins (+5), expansion signals (+5).
-2. For each recommendation, set a realistic due_date (ISO YYYY-MM-DD) based on urgency:
-   immediate = within 2 days, this-week = within 7 days, this-month = within 30 days, this-quarter = within 90 days.
-3. Set priority: P1 = immediate + high business impact, P2 = this-week/this-month, P3 = this-quarter.
-4. expected_outcome must be a concrete, measurable result (not vague).
+
+You are performing a business review for ONE customer.
+
+Your objective is to understand the customer's current business situation by combining:
+
+- CRM information
+- Recent customer interactions
+- Enterprise Knowledge Base articles
+- Previous recommendations and outcomes (memory)
+
+Never assume information that is unavailable.
+
+If evidence is missing,
+identify it as an Information Gap instead of guessing.
+
+Do NOT rely on stored health_score or status.
+
+Analyse in this order:
+
+1. CUSTOMER CONTEXT
+- Summarise the customer's current business situation.
+- Identify important stakeholders.
+- Consider ARR, contract timeline and customer tier.
+
+2. INTERACTION ANALYSIS
+Review emails, tickets and meeting notes.
+
+Determine:
+- recurring issues
+- new issues
+- customer sentiment
+- urgency
+- executive involvement
+- feature requests
+- product adoption
+- business blockers
+
+3. KNOWLEDGE BASE REASONING
+Use retrieved enterprise knowledge only when relevant.
+
+Reference playbooks or troubleshooting guides whenever they help justify recommendations.
+
+Do NOT invent company processes.
+
+4. MEMORY REASONING
+
+Review previous recommendations.
+
+If a recommendation was:
+
+• completed
+→ treat this as evidence that the work was performed, not proof that the expected outcome was achieved. Compare the actual outcome with the success metric. If the result is partial or failed, keep the unresolved portion open and recommend targeted follow-up; do not repeat steps already validated successfully.
+
+• pending
+→ determine whether it should remain active.
+
+• rejected
+→ avoid recommending the same action again unless strong new evidence exists.
+
+Use the Hindsight decision and outcome records above when generating recommendations.
+An approval without a completed outcome is still pending, not proof of success.
+Do not repeat a completed action unchanged. Its actual outcome determines whether the
+problem is resolved; a partial result leaves its failed portion open even without new
+interactions. Do not repeat an approved pending action unchanged. Use the current date
+above: every recommendation due date must be today or later; never copy an example date.
+
+Increase business urgency when:
+
+- the same issue appears again after completion
+- customer repeatedly reports the same issue
+- multiple follow-up emails exist
+- issue duration is increasing
+
+5. BUSINESS RISK
+
+Identify:
+
+- renewal risk
+- churn indicators
+- operational risk
+- customer relationship risk
+- technical risk
+
+Support every risk with evidence.
+
+6. BUSINESS OPPORTUNITIES
+
+Identify:
+
+- expansion opportunities
+- upsell potential
+- advocacy opportunities
+- adoption improvements
+
+Support every opportunity with evidence.
+
+7.Recommendation Prioritization
+
+Assign every recommendation a business priority.
+
+P1
+- Business-critical.
+- Blocking customer operations.
+- Renewal at immediate risk.
+- Recurring issue after previous completion.
+- Executive escalation required.
+- Same unresolved issue reported multiple times.
+
+P2
+- Important but not business-critical.
+- Feature requests.
+- Pending follow-ups.
+- Adoption improvements.
+- Business Value Reviews.
+- Expansion preparation.
+
+P3
+- Long-term improvements.
+- Training.
+- Documentation.
+- Future expansion.
+- Process optimization.
+
+Priority should be determined using:
+
+- Business impact
+- Customer history
+- Recommendation memory
+- Urgency
+- Evidence
+
+8. NEXT BEST ACTIONS
+
+Generate recommendations that:
+
+- are prioritised by business impact
+- are actionable
+- have clear owners
+- include due dates-consider contract timeline and business urgency
+- reference and include  supporting evidence
+- reference relevant knowledge base guidance where applicable
+
+Never recommend actions already completed unless new evidence indicates the issue has returned.
+
+8. CUSTOMER HEALTH
+
+Finally calculate:
+
+- Health Score
+- Status
+- Trend
+
+The score should be evidence-based.
+
+Not formula-based.
+
+Health should be an OUTPUT of the analysis, not the starting point.
+
+9. EXECUTIVE SUMMARY
+
+Summarise:
+
+- current customer situation
+- major risks
+- opportunities
+- recommended business posture
+
+Health Score Guidelines
+
+Health Score is an overall indicator of customer relationship quality.
+
+Consider:
+
+• recurring support issues
+• executive escalations
+• customer sentiment
+• feature adoption
+• unresolved recommendations
+• contract timeline
+• business impact
+• expansion interest
+• successful completion of previous actions
+
+The score should be evidence-based rather than formula-based.
+
+Always explain why the score was assigned.
  
 Return this exact JSON structure:
 {{
@@ -72,7 +278,7 @@ Return this exact JSON structure:
       "category": "risk-mitigation|expansion|relationship|technical|strategic",
       "urgency": "immediate|this-week|this-month|this-quarter",
       "priority": "P1|P2|P3",
-      "due_date": "2025-01-15",
+    "due_date": "YYYY-MM-DD",
       "description": "exactly what to do and why in 2-3 sentences",
       "owner": "CSM|Engineering|Account Executive|Executive",
       "expected_outcome": "specific measurable result e.g. Epic integration restored, adoption rises from 34% to 60% in 30 days",
@@ -92,6 +298,45 @@ Return this exact JSON structure:
 }}"""
  
  
+def _format_hindsight_history(entries: list[dict]) -> str:
+    if not entries:
+        return "No Hindsight decision or outcome records were recalled."
+
+    lines = []
+    for entry in entries[:10]:
+        decision = str(entry.get("decision", "unknown")).lower()
+        outcome = str(entry.get("outcome", "")).strip()
+        todo_status = str(entry.get("todo_status", "")).lower()
+        recorded_at = (
+            entry.get("done_at")
+            or entry.get("created_at")
+            or entry.get("mentioned_at")
+            or "date unavailable"
+        )
+        if decision in {"approved", "accepted"} and (todo_status == "done" or outcome):
+            status = "ACTION EXECUTED; EVALUATE RESULT"
+        elif decision in {"approved", "accepted"}:
+            status = "APPROVED, STILL PENDING"
+        elif decision in {"rejected", "declined"}:
+            status = "REJECTED"
+        else:
+            status = decision.upper()
+
+        details = [
+            f"{status} [{str(recorded_at)[:10]}]: "
+            f"{entry.get('recommendation') or entry.get('memory') or 'Unknown action'}"
+        ]
+        if entry.get("feedback"):
+            details.append(f"reviewer feedback: {entry['feedback']}")
+        if outcome:
+            details.append(f"actual outcome: {outcome}")
+        if entry.get("success_metric"):
+            details.append(f"success metric: {entry['success_metric']}")
+        lines.append("- " + "; ".join(details))
+
+    return "\n".join(lines)
+
+
 def _clean_json(raw: str) -> str:
     raw = raw.strip()
     if raw.startswith("```"):
@@ -107,6 +352,7 @@ async def reasoning_agent(state: AgentState) -> AgentState:
     llm       = get_llm()
     ctx       = state.get("customer_context", {})
     past_recs = state.get("past_recommendations", [])
+    hindsight_entries = state.get("hindsight_entries", [])
     logs: list[str] = []
  
     customer     = ctx.get("customer", {})
@@ -134,6 +380,7 @@ async def reasoning_agent(state: AgentState) -> AgentState:
             f"Completed actions: {', '.join(completed) if completed else 'none'}"
         )
     past_text = "\n\n".join(past_lines) if past_lines else "No previous recommendations."
+    hindsight_text = _format_hindsight_history(hindsight_entries)
  
     prompt = _COMBINED_PROMPT.format(
         customer_json = json.dumps({
@@ -148,6 +395,7 @@ async def reasoning_agent(state: AgentState) -> AgentState:
         interactions_text = interactions_text,
         kb_text           = kb_text,
         past_text         = past_text,
+        hindsight_text    = hindsight_text,
         today             = datetime.utcnow().strftime("%Y-%m-%d"),
     )
  
@@ -179,6 +427,21 @@ async def reasoning_agent(state: AgentState) -> AgentState:
     risks  = result.get("risks", [])
     opps   = result.get("opportunities", [])
     calc   = result.get("calculated_health", {})
+
+    today = datetime.utcnow().date()
+    adjusted_due_dates = 0
+    for recommendation in recs:
+        try:
+            due_date = date.fromisoformat(str(recommendation.get("due_date") or ""))
+        except ValueError:
+            due_date = None
+        if due_date is None or due_date < today:
+            recommendation["due_date"] = today.isoformat()
+            adjusted_due_dates += 1
+    if adjusted_due_dates:
+        logs.append(
+            f"[Reasoning] Corrected {adjusted_due_dates} missing or past due dates to {today.isoformat()}"
+        )
  
     logs.append(f"[Reasoning] Calculated health: {calc.get('score','?')}/100 — {calc.get('status','?')} ({calc.get('trend','?')})")
     logs.append(f"[Reasoning] {len(risks)} risks, {len(opps)} opportunities")
